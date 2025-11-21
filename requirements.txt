@@ -1,0 +1,5 @@
+# Python dependencies for convert_compress_script.py
+# Note: `cwebp` (libwebp) is required separately as a system binary and
+# is NOT installed via pip. On Windows install from https://developers.google.com/speed/webp
+
+Pillow>=9.0.0
