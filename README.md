@@ -1,8 +1,6 @@
-# convert_compress_script.py
+# image_converter_compressor
 
 A compact, cross-platform utility to convert common image formats (JPEG, PNG, TIFF, BMP) to WebP and to compress existing WebP images using the `cwebp` command-line tool. The script applies EXIF orientation before conversion, so portrait images keep the correct rotation in the produced WebP files.
-
-**Location**: `convert_compress_script.py` (same folder)
 
 ---
 
