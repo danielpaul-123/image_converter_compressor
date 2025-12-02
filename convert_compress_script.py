@@ -9,6 +9,12 @@ except Exception:
     Image = None
     ImageOps = None
 
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except Exception:
+    pillow_heif = None
+
 # Set the directory containing images (default)
 INPUT_DIR = "images"
 
@@ -16,7 +22,7 @@ INPUT_DIR = "images"
 QUALITY = 85  # Adjust for balance between size and quality
 METHOD = 6     # Compression method (higher = better but slower)
 
-SUPPORTED_FORMATS = (".jpg", ".jpeg", ".png", ".bmp", ".tiff")
+SUPPORTED_FORMATS = (".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".heic", ".heif")
 
 # Runtime configuration populated from CLI args
 CONFIG = {}
@@ -76,7 +82,36 @@ def compress_webp(image_path):
     method = CONFIG.get("method", METHOD)
     sharp = CONFIG.get("sharp_yuv", True)
     extra = CONFIG.get("cwebp_args", "") or ""
+    scale = CONFIG.get("scale", 1.0)
 
+    # If scale < 1.0, we need to downscale the WebP image first using Pillow
+    if scale < 1.0 and Image is not None:
+        try:
+            with Image.open(image_path) as img:
+                original_size = img.size
+                new_width = int(img.width * scale)
+                new_height = int(img.height * scale)
+                
+                # Ensure dimensions are at least 1x1
+                new_width = max(1, new_width)
+                new_height = max(1, new_height)
+                
+                # Use high-quality Lanczos resampling for downscaling
+                resized = img.resize((new_width, new_height), Image.LANCZOS)
+                
+                # Save directly as WebP with Pillow (avoids cwebp subprocess)
+                save_kwargs = {
+                    'format': 'WEBP',
+                    'quality': quality,
+                    'method': method
+                }
+                resized.save(image_path, **save_kwargs)
+                print(f"✔ Compressed & scaled: {image_path} ({original_size[0]}x{original_size[1]} → {new_width}x{new_height})")
+                return
+        except Exception as e:
+            print(f"[compress_webp] Pillow resize failed for {image_path}: {e}, falling back to cwebp")
+    
+    # Original cwebp subprocess path (for scale=1.0 or if Pillow unavailable)
     command = ["cwebp", image_path, "-q", str(quality), "-m", str(method)]
     if sharp:
         command.append("-sharp_yuv")
@@ -100,6 +135,7 @@ def convert_to_webp(image_path):
     # an oriented temporary file to ensure the output WebP has correct rotation.
     base = os.path.splitext(image_path)[0]
     webp_path = base + ".webp"
+    scale = CONFIG.get("scale", 1.0)
 
     temp_input = image_path
     temp_created = False
@@ -110,6 +146,21 @@ def convert_to_webp(image_path):
                 oriented = ImageOps.exif_transpose(img)
                 if oriented.mode not in ("RGB", "RGBA"):
                     oriented = oriented.convert("RGB")
+                
+                original_size = oriented.size
+                
+                # Apply downscaling if scale < 1.0
+                if scale < 1.0:
+                    new_width = int(oriented.width * scale)
+                    new_height = int(oriented.height * scale)
+                    
+                    # Ensure dimensions are at least 1x1
+                    new_width = max(1, new_width)
+                    new_height = max(1, new_height)
+                    
+                    # Use high-quality Lanczos resampling for downscaling
+                    oriented = oriented.resize((new_width, new_height), Image.LANCZOS)
+                    print(f"[convert_to_webp] Scaled: {image_path} ({original_size[0]}x{original_size[1]} → {new_width}x{new_height})")
 
                 # Choose a safe temporary format that cwebp accepts
                 if img.format and img.format.upper() == 'PNG':
@@ -180,8 +231,13 @@ def main():
     parser.add_argument("--no-sharp-yuv", dest="sharp_yuv", action="store_false", help="Disable -sharp_yuv flag")
     parser.add_argument("--cwebp-args", default="", help="Additional raw arguments to pass to cwebp (quoted)")
     parser.add_argument("--workers", type=int, default=0, help="Number of worker threads (0 = os.cpu_count())")
+    parser.add_argument("--scale", type=float, default=1.0, help="Downscale factor (0.0-1.0). E.g., 0.5 = 50%% resolution. Default: 1.0 (no scaling)")
 
     args = parser.parse_args()
+    
+    # Validate scale parameter
+    if args.scale <= 0.0 or args.scale > 1.0:
+        parser.error("--scale must be between 0.0 (exclusive) and 1.0 (inclusive)")
 
     # Populate runtime CONFIG used by worker functions
     CONFIG.update({
@@ -191,6 +247,7 @@ def main():
         "sharp_yuv": args.sharp_yuv,
         "cwebp_args": args.cwebp_args,
         "workers": args.workers or (os.cpu_count() or 1),
+        "scale": args.scale,
     })
 
     images = find_images(CONFIG.get("input_dir", INPUT_DIR))
@@ -199,7 +256,8 @@ def main():
         print("No images found.")
         return
 
-    print(f"Found {len(images)} images. Processing with {CONFIG['workers']} workers...")
+    scale_info = f" (scale={CONFIG['scale']})" if CONFIG['scale'] < 1.0 else ""
+    print(f"Found {len(images)} images. Processing with {CONFIG['workers']} workers{scale_info}...")
 
     # Use multi-threading to speed up compression and conversion
     with concurrent.futures.ThreadPoolExecutor(max_workers=CONFIG["workers"]) as executor:

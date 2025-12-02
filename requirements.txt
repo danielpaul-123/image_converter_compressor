@@ -3,3 +3,4 @@
 # is NOT installed via pip. On Windows install from https://developers.google.com/speed/webp
 
 Pillow>=9.0.0
+pillow-heif>=0.10.0  # For HEIC/HEIF image support
